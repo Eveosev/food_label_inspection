@@ -4,8 +4,6 @@ from typing import Optional
 import json
 import os
 import uuid
-import httpx
-import base64
 import asyncio
 import logging
 import requests
@@ -65,7 +63,14 @@ def upload_image(file_path, user):
         logger.info("files: %s", files)
         logger.info("data: %s", data)
         logger.info("headers: %s", headers)
-        response = requests.post(DIFY_FILE_URL, headers=headers, files=files, data=data)
+        # 简单的requests.post请求，不使用重试
+        response = requests.post(
+            DIFY_FILE_URL,
+            headers=headers,
+            files=files,
+            data=data,
+            timeout=(30, 180)  # (连接超时, 读取超时)
+        )
         logger.info(f"Dify文件上传响应状态码: {response.status_code}")
         logger.info(f"Dify文件上传响应内容: {response.text}")
         
@@ -83,245 +88,333 @@ def upload_image(file_path, user):
         logger.error(f"堆栈跟踪: {traceback.format_exc()}")
         return None
 
-async def call_dify_workflow(image_file_path: str, food_type: str, package_food_type: str, single_or_multi: str, package_size: str, max_retries: int = 1):
-    """调用Dify Workflow API进行食品标签检测，带重试机制"""
+def parse_streaming_response(response):
+    """解析Dify流式响应"""
+    logger.info("开始解析Server-Sent Events (SSE)流式响应")
     
-    user_id = f"user-{uuid.uuid4().hex[:8]}"
-    for attempt in range(max_retries + 1):
-        try:
-            if attempt > 0:
-                logger.info(f"第 {attempt + 1} 次尝试调用Dify API...")
-                await asyncio.sleep(2 ** attempt)  # 指数退避
-            
-            logger.info("=" * 60)
-            logger.info(f"开始调用Dify Workflow API (尝试 {attempt + 1}/{max_retries + 1})")
-            logger.info(f"图片文件路径: {image_file_path}")
-            logger.info(f"食品类型: {food_type}")
-            logger.info(f"包装食品类型: {package_food_type}")
-            logger.info(f"单包装或多包装: {single_or_multi}")
-            logger.info(f"包装尺寸: {package_size}")
-            logger.info(f"Dify API URL: {DIFY_API_URL}")
-            logger.info(f"Dify API Token: {DIFY_API_TOKEN[:20]}...")
-            
-            # 检查文件路径类型，决定使用本地文件还是base64编码
-            if image_file_path.startswith("http"):
-                # 远程URL方式
-                logger.info("使用远程URL方式上传图片")
-                tag_image = {
-                    "type": "image",
-                    "transfer_method": "remote_url",
-                    "url": image_file_path
-                }
-            else:
-                # 本地文件，先上传到Dify服务器，然后使用文件ID
-                logger.info("使用Dify文件上传方式处理图片")
-                file_info = upload_image(image_file_path, user=user_id)
+    # 用于存储解析结果
+    workflow_data = {
+        "task_id": None,
+        "workflow_run_id": None,
+        "workflow_id": None,
+        "status": None,
+        "outputs": {},
+        "total_tokens": 0,
+        "total_price": 0.0,
+        "currency": "USD",
+        "elapsed_time": 0.0,
+        "total_steps": 0,
+        "created_at": None,
+        "finished_at": None,
+        "events": []  # 存储所有事件
+    }
+    
+    try:
+        # 逐行读取流式响应
+        for line in response.iter_lines(decode_unicode=True):
+            if not line or line.strip() == "":
+                continue
                 
-                if file_info and file_info.get('id'):
-                    # 使用上传后的文件ID
-                    tag_image = {
-                        "type": "image",
-                        "transfer_method": "local_file", 
-                        "upload_file_id": file_info['id']
-                    }
-                    logger.info(f"使用Dify文件ID: {file_info['id']}")
-                else:
-                    raise Exception(f"图片上传Dify服务器失败，请检查")
+            logger.debug(f"收到SSE行: {line}")
             
-            # 构建请求数据
-            payload = {
-                "inputs": {
-                    "TagImage": [tag_image],
-                    "Foodtype": food_type,
-                    "PackageFoodType": package_food_type,
-                    "SingleOrMulti": single_or_multi,
-                    "PackageSize": package_size
-                },
-                "response_mode": "blocking",
-                "user": user_id
-            }
-            
-            logger.info("请求载荷:")
-            logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
-            
-            # 发送请求到Dify API
-            logger.info("开始发送HTTP请求到Dify API...")
-            
-            # 配置更健壮的HTTP客户端
-            timeout = httpx.Timeout(
-                connect=180.0,  # 连接超时
-                read=180.0,     # 读取超时
-                write=180.0,    # 写入超时
-                pool=180.0      # 连接池超时
-            )
-            
-            # 配置重试机制的限制
-            limits = httpx.Limits(
-                max_keepalive_connections=1,
-                max_connections=10,
-                keepalive_expiry=180.0
-            )
-            
-            async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
-                logger.info("发送POST请求...")
+            # SSE格式：data: {json}
+            if line.startswith("data: "):
                 try:
-                    response = await client.post(
-                        DIFY_API_URL,
-                        headers={
-                            "Authorization": f"Bearer {DIFY_API_TOKEN}",
-                            "Content-Type": "application/json"
-                        },
-                        json=payload
-                    )
+                    json_str = line[6:]  # 去掉"data: "前缀
+                    event_data = json.loads(json_str)
                     
-                    logger.info(f"HTTP响应状态码: {response.status_code}")
-                    logger.info(f"HTTP响应头: {dict(response.headers)}")
+                    event_type = event_data.get("event")
+                    data = event_data.get("data", {})
                     
-                    if response.status_code == 200:
-                        try:
-                            # 尝试解析JSON响应
-                            logger.info("开始解析JSON响应...")
-                            result = response.json()
-                            logger.info("Dify API调用成功!")
-                            logger.info("响应内容:")
-                            logger.info(json.dumps(result, indent=2, ensure_ascii=False))
-                            logger.info("=" * 60)
-                            return {
-                                "success": True,
-                                "data": result,
-                                "message": "Dify Workflow调用成功"
-                            }
-                        except Exception as json_error:
-                            logger.error(f"JSON解析失败: {str(json_error)}")
-                            logger.error(f"原始响应内容长度: {len(response.content) if hasattr(response, 'content') else 'unknown'}")
-                            # 如果是200状态码但JSON解析失败，说明Dify可能返回了非JSON格式的成功响应
-                            return {
-                                "success": False,
-                                "error": f"响应解析失败: {str(json_error)}",
-                                "message": "Dify返回了非JSON格式的响应",
-                                "status_code": response.status_code,
-                                "raw_response": str(response.content[:500]) if hasattr(response, 'content') else "无法获取响应内容"
-                            }
-                    else:
-                        try:
-                            error_text = response.text
-                        except Exception:
-                            error_text = "无法读取错误响应内容"
-                        logger.error(f"Dify API调用失败!")
-                        logger.error(f"状态码: {response.status_code}")
-                        logger.error(f"响应内容: {error_text}")
-                        logger.info("=" * 60)
-                        return {
-                            "success": False,
-                            "error": f"Dify API调用失败: {response.status_code} - {error_text}",
-                            "message": "检测失败"
-                        }
+                    logger.info(f"处理事件: {event_type}")
+                    workflow_data["events"].append(event_data)
+                    
+                    # 根据事件类型处理
+                    if event_type == "workflow_started":
+                        workflow_data["task_id"] = event_data.get("task_id")
+                        workflow_data["workflow_run_id"] = event_data.get("workflow_run_id")
+                        workflow_data["workflow_id"] = data.get("workflow_id")
+                        workflow_data["created_at"] = data.get("created_at")
+                        logger.info(f"工作流开始: {workflow_data['task_id']}")
                         
-                except httpx.ReadError as read_error:
-                    # 特殊处理ReadError：如果是在读取响应时出错，但请求可能已经成功
-                    logger.error(f"读取响应时发生ReadError: {str(read_error)}")
-                    logger.info("虽然读取响应失败，但Dify服务器可能已经成功处理了请求")
-                    # 对于ReadError，不继续重试，直接返回特殊错误信息
-                    raise read_error
-                    
-        except httpx.ReadError as e:
-            logger.error(f"读取响应时发生错误: {str(e)}")
-            logger.error("这通常表示Dify服务器处理完成但在传输响应时连接中断")
-            logger.error("可能的原因:")
-            logger.error("1. 响应数据量过大")
-            logger.error("2. 服务器处理时间过长")
-            logger.error("3. 网络连接不稳定")
-            logger.info("虽然出现ReadError，但Dify服务器可能已经成功处理了请求")
-            
-            # 对于ReadError，我们假设Dify服务器已经成功处理，返回一个占位成功响应
-            logger.warning("由于ReadError但Dify可能已成功处理，返回占位成功响应")
-            logger.info("=" * 60)
+                    elif event_type == "node_started":
+                        node_id = data.get("node_id")
+                        node_type = data.get("node_type")
+                        title = data.get("title")
+                        logger.info(f"节点开始: {title} ({node_type})")
+                        
+                    elif event_type == "node_finished":
+                        node_id = data.get("node_id")
+                        node_type = data.get("node_type") 
+                        title = data.get("title")
+                        status = data.get("status")
+                        elapsed_time = data.get("elapsed_time", 0)
+                        
+                        # 累计执行时间
+                        workflow_data["elapsed_time"] += elapsed_time
+                        
+                        # 提取执行元数据
+                        metadata = data.get("execution_metadata", {})
+                        if metadata:
+                            workflow_data["total_tokens"] += metadata.get("total_tokens", 0)
+                            workflow_data["total_price"] += metadata.get("total_price", 0.0)
+                            workflow_data["currency"] = metadata.get("currency", "USD")
+                        
+                        # 提取输出数据
+                        outputs = data.get("outputs", {})
+                        if outputs:
+                            workflow_data["outputs"].update(outputs)
+                            logger.info(f"节点输出: {json.dumps(outputs, ensure_ascii=False)}")
+                            
+                        logger.info(f"节点完成: {title} ({status}) - {elapsed_time}s")
+                        
+                    elif event_type == "workflow_finished":
+                        workflow_data["status"] = data.get("status")
+                        workflow_data["finished_at"] = data.get("finished_at")
+                        workflow_data["total_steps"] = data.get("total_steps", 0)
+                        
+                        # 最终输出
+                        final_outputs = data.get("outputs", {})
+                        if final_outputs:
+                            workflow_data["outputs"].update(final_outputs)
+                            logger.info(f"最终输出: {json.dumps(final_outputs, ensure_ascii=False)}")
+                            
+                        # 最终统计
+                        final_tokens = data.get("total_tokens")
+                        if final_tokens:
+                            workflow_data["total_tokens"] = final_tokens
+                            
+                        logger.info(f"工作流完成: {workflow_data['status']}")
+                        logger.info(f"总用时: {workflow_data['elapsed_time']}s")
+                        logger.info(f"总令牌: {workflow_data['total_tokens']}")
+                        
+                    elif event_type == "tts_message":
+                        # TTS消息处理（如果需要）
+                        logger.debug("收到TTS消息")
+                        
+                    elif event_type == "tts_message_end":
+                        # TTS消息结束
+                        logger.debug("TTS消息结束")
+                        
+                    else:
+                        logger.warning(f"未处理的事件类型: {event_type}")
+                        
+                except json.JSONDecodeError as e:
+                    logger.warning(f"JSON解析失败: {json_str} - {e}")
+                    continue
+                except Exception as e:
+                    logger.error(f"处理事件数据失败: {e}")
+                    continue
+        
+        # 检查是否成功完成
+        if workflow_data["status"] == "succeeded":
+            logger.info("流式响应解析成功!")
             return {
                 "success": True,
                 "data": {
-                    "workflow_run_id": f"placeholder-{uuid.uuid4().hex[:8]}",
-                    "task_id": f"task-{uuid.uuid4().hex[:8]}",
-                    "status": "succeeded",
-                    "outputs": {
-                        "text": "检测已完成，但由于网络问题无法获取完整结果。Dify服务器已成功处理您的请求。",
-                        "检测结果": "处理完成",
-                        "建议": "如需完整结果，请查看Dify服务器日志或重新提交请求"
-                    },
+                    "workflow_run_id": workflow_data["workflow_run_id"],
+                    "task_id": workflow_data["task_id"],
+                    "status": workflow_data["status"],
+                    "outputs": workflow_data["outputs"],
                     "metadata": {
-                        "total_tokens": 0,
-                        "total_price": "0.00000",
-                        "currency": "USD"
+                        "total_tokens": workflow_data["total_tokens"],
+                        "total_price": workflow_data["total_price"],
+                        "currency": workflow_data["currency"],
+                        "elapsed_time": workflow_data["elapsed_time"],
+                        "total_steps": workflow_data["total_steps"]
                     },
-                    "read_error_occurred": True,
-                    "original_error": str(e)
-                },
-                "message": "检测可能已完成（ReadError恢复）",
-                "warning": "由于网络读取错误，返回占位结果"
+                    "created_at": workflow_data["created_at"],
+                    "finished_at": workflow_data["finished_at"],
+                    "event_count": len(workflow_data["events"])
+                }
             }
-        except httpx.ConnectError as e:
-            logger.error(f"连接错误: {str(e)}")
-            logger.error("可能的原因:")
-            logger.error("1. Dify服务器无法访问")
-            logger.error("2. 网络连接问题") 
-            logger.error("3. URL地址错误")
+        elif workflow_data["status"] == "failed":
+            logger.error("工作流执行失败")
+            return {
+                "success": False,
+                "error": "工作流执行失败",
+                "data": workflow_data
+            }
+        else:
+            logger.warning(f"工作流状态异常: {workflow_data['status']}")
+            return {
+                "success": False,
+                "error": f"工作流状态异常: {workflow_data['status']}",
+                "data": workflow_data
+            }
             
-            if attempt < max_retries:
-                logger.info(f"连接失败，将在 {2 ** (attempt + 1)} 秒后重试...")
-                continue
-            else:
-                logger.error("已达到最大重试次数，放弃重试")
-                logger.info("=" * 60)
-                return {
-                    "success": False,
-                    "error": f"连接Dify服务器失败: {str(e)}",
-                    "message": "无法连接到Dify服务器",
-                    "attempts": attempt + 1
-                }
-        except httpx.TimeoutException as e:
-            logger.error(f"请求超时: {str(e)}")
-            logger.error("超时类型可能包括:")
-            logger.error("1. 连接超时 - 无法建立连接")
-            logger.error("2. 读取超时 - 等待响应超时")
-            logger.error("3. 写入超时 - 发送数据超时")
-            
-            if attempt < max_retries:
-                logger.info(f"请求超时，将在 {2 ** (attempt + 1)} 秒后重试...")
-                continue
-            else:
-                logger.error("已达到最大重试次数，放弃重试")
-                logger.info("=" * 60)
-                return {
-                    "success": False,
-                    "error": f"请求超时: {str(e)}",
-                    "message": "请求超时",
-                    "attempts": attempt + 1
-                }
-        except Exception as e:
-            logger.error(f"发生未预期异常: {str(e)}")
-            logger.error(f"异常类型: {type(e).__name__}")
-            import traceback
-            logger.error(f"堆栈跟踪:\n{traceback.format_exc()}")
-            
-            if attempt < max_retries:
-                logger.info(f"发生异常，将在 {2 ** (attempt + 1)} 秒后重试...")
-                continue
-            else:
-                logger.error("已达到最大重试次数，放弃重试")
-                logger.info("=" * 60)
-                return {
-                    "success": False,
-                    "error": str(e),
-                    "message": "检测过程中发生错误",
-                    "attempts": attempt + 1
-                }
+    except Exception as e:
+        logger.error(f"流式响应解析异常: {str(e)}")
+        import traceback
+        logger.error(f"堆栈跟踪: {traceback.format_exc()}")
+        return {
+            "success": False,
+            "error": f"流式响应解析异常: {str(e)}",
+            "data": workflow_data
+        }
+
+def call_dify_workflow(image_file_path: str, food_type: str, package_food_type: str, single_or_multi: str, package_size: str):
+    """调用Dify Workflow API进行食品标签检测"""
     
-    # 如果所有重试都失败了（理论上不应该到这里）
-    return {
-        "success": False,
-        "error": "所有重试尝试都失败",
-        "message": "检测失败",
-        "attempts": max_retries + 1
-    }
+    user_id = f"user-{uuid.uuid4().hex[:8]}"
+    
+    try:
+        logger.info("=" * 60)
+        logger.info("开始调用Dify Workflow API")
+        logger.info(f"图片文件路径: {image_file_path}")
+        logger.info(f"食品类型: {food_type}")
+        logger.info(f"包装食品类型: {package_food_type}")
+        logger.info(f"单包装或多包装: {single_or_multi}")
+        logger.info(f"包装尺寸: {package_size}")
+        logger.info(f"Dify API URL: {DIFY_API_URL}")
+        logger.info(f"Dify API Token: {DIFY_API_TOKEN[:20]}...")
+        
+        # 检查文件路径类型，决定使用本地文件还是base64编码
+        if image_file_path.startswith("http"):
+            # 远程URL方式
+            logger.info("使用远程URL方式上传图片")
+            tag_image = {
+                "type": "image",
+                "transfer_method": "remote_url",
+                "url": image_file_path
+            }
+        else:
+            # 本地文件，先上传到Dify服务器，然后使用文件ID
+            logger.info("使用Dify文件上传方式处理图片")
+            file_info = upload_image(image_file_path, user=user_id)
+            
+            if file_info and file_info.get('id'):
+                # 使用上传后的文件ID
+                tag_image = {
+                    "type": "image",
+                    "transfer_method": "local_file", 
+                    "upload_file_id": file_info['id']
+                }
+                logger.info(f"使用Dify文件ID: {file_info['id']}")
+            else:
+                raise Exception(f"图片上传Dify服务器失败，请检查")
+        
+        # 构建请求数据
+        payload = {
+            "inputs": {
+                "TagImage": [tag_image],
+                "Foodtype": food_type,
+                "PackageFoodType": package_food_type,
+                "SingleOrMulti": single_or_multi,
+                "PackageSize": package_size
+            },
+            "response_mode": "streaming",
+            "user": user_id
+        }
+        
+        logger.info("请求载荷:")
+        logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
+        
+        # 发送请求到Dify API
+        logger.info("开始发送HTTP请求到Dify API...")
+        logger.info("发送POST请求...")
+        
+        # 发送流式请求
+        response = requests.post(
+            DIFY_API_URL,
+            headers={
+                "Authorization": f"Bearer {DIFY_API_TOKEN}",
+                "Content-Type": "application/json",
+                "User-Agent": "Food-Safety-Label-Detection/1.0"
+            },
+            json=payload,
+            timeout=(30, 300),  # (连接超时, 读取超时)
+            stream=True  # 启用流式响应
+        )
+        
+        logger.info(f"HTTP响应状态码: {response.status_code}")
+        logger.info(f"HTTP响应头: {dict(response.headers)}")
+        
+        if response.status_code == 200:
+            try:
+                # 解析流式响应
+                logger.info("开始解析流式响应...")
+                result = parse_streaming_response(response)
+                
+                if result["success"]:
+                    logger.info("Dify API流式调用成功!")
+                    logger.info("最终结果:")
+                    logger.info(json.dumps(result["data"], indent=2, ensure_ascii=False))
+                    logger.info("=" * 60)
+                    return {
+                        "success": True,
+                        "data": result["data"],
+                        "message": "Dify Workflow调用成功"
+                    }
+                else:
+                    logger.error(f"流式响应处理失败: {result['error']}")
+                    return result
+                    
+            except Exception as stream_error:
+                logger.error(f"流式响应解析失败: {str(stream_error)}")
+                import traceback
+                logger.error(f"堆栈跟踪: {traceback.format_exc()}")
+                return {
+                    "success": False,
+                    "error": f"流式响应解析失败: {str(stream_error)}",
+                    "message": "响应格式错误"
+                }
+        else:
+            error_text = response.text
+            logger.error(f"Dify API调用失败!")
+            logger.error(f"状态码: {response.status_code}")
+            logger.error(f"响应内容: {error_text}")
+            logger.info("=" * 60)
+            return {
+                "success": False,
+                "error": f"Dify API调用失败: {response.status_code} - {error_text}",
+                "message": "检测失败"
+            }
+            
+    except requests.exceptions.ReadTimeout as e:
+        logger.error(f"读取响应超时: {str(e)}")
+        logger.error("Dify服务器处理时间过长")
+        logger.info("=" * 60)
+        return {
+            "success": False,
+            "error": f"读取响应超时: {str(e)}",
+            "message": "响应超时"
+        }
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"连接错误: {str(e)}")
+        
+        # 特别处理Connection reset by peer错误
+        if "Connection reset by peer" in str(e) or "ConnectionResetError" in str(e):
+            logger.error("检测到Connection reset by peer错误")
+            logger.error("Dify服务器主动断开连接")
+        else:
+            logger.error("无法连接到Dify服务器")
+        
+        logger.info("=" * 60)
+        return {
+            "success": False,
+            "error": f"连接Dify服务器失败: {str(e)}",
+            "message": "无法连接到Dify服务器"
+        }
+    except requests.exceptions.Timeout as e:
+        logger.error(f"请求超时: {str(e)}")
+        logger.info("=" * 60)
+        return {
+            "success": False,
+            "error": f"请求超时: {str(e)}",
+            "message": "请求超时"
+        }
+    except Exception as e:
+        logger.error(f"发生未预期异常: {str(e)}")
+        logger.error(f"异常类型: {type(e).__name__}")
+        import traceback
+        logger.error(f"堆栈跟踪:\n{traceback.format_exc()}")
+        logger.info("=" * 60)
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "检测过程中发生错误"
+        }
 
 @app.get("/")
 async def root():
@@ -337,7 +430,7 @@ async def health_check():
     }
 
 @app.get("/api/test-dify")
-async def test_dify_connection():
+def test_dify_connection():
     """测试Dify API连接"""
     try:
         logger.info("开始测试Dify API连接...")
@@ -373,47 +466,80 @@ async def test_dify_connection():
         }
         
         logger.info("发送测试请求到Dify API...")
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            response = await client.post(
-                DIFY_API_URL,
-                headers={
-                    "Authorization": f"Bearer {DIFY_API_TOKEN}",
-                    "Content-Type": "application/json"
-                },
-                json=test_payload
-            )
-            
-            logger.info(f"测试响应状态码: {response.status_code}")
-            logger.info(f"测试响应头: {dict(response.headers)}")
-            
+        
+        # 流式请求测试
+        response = requests.post(
+            DIFY_API_URL,
+            headers={
+                "Authorization": f"Bearer {DIFY_API_TOKEN}",
+                "Content-Type": "application/json",
+                "User-Agent": "Food-Safety-Label-Detection/1.0"
+            },
+            json=test_payload,
+            timeout=(30, 180),  # (连接超时, 读取超时)
+            stream=True  # 启用流式响应
+        )
+
+        logger.info(f"测试响应状态码: {response.status_code}")
+        logger.info(f"测试响应头: {dict(response.headers)}")
+        
+        if response.status_code == 200:
+            # 尝试解析流式响应
             try:
-                response_json = response.json()
-                logger.info(f"测试响应返回: {response_json}")
-            except Exception as json_error:
-                logger.warning(f"无法解析响应JSON: {json_error}")
-                response_json = "无法解析为JSON"
-            
-            result = {
-                "success": True,
+                logger.info("测试流式响应解析...")
+                stream_result = parse_streaming_response(response)
+                
+                result = {
+                    "success": True,
+                    "dify_url": DIFY_API_URL,
+                    "status_code": response.status_code,
+                    "response_headers": dict(response.headers),
+                    "message": "Dify API流式连接测试完成",
+                    "stream_parsing": stream_result["success"],
+                    "stream_data": stream_result.get("data", {})
+                }
+                
+                if stream_result["success"]:
+                    logger.info("流式响应测试成功!")
+                else:
+                    logger.warning(f"流式响应解析失败: {stream_result.get('error')}")
+                    
+                return result
+                
+            except Exception as stream_error:
+                logger.error(f"流式响应测试失败: {stream_error}")
+                return {
+                    "success": False,
+                    "dify_url": DIFY_API_URL,
+                    "status_code": response.status_code,
+                    "error": f"流式响应测试失败: {stream_error}",
+                    "message": "流式响应测试异常"
+                }
+        else:
+            # 非200状态码
+            try:
+                error_text = response.text
+            except:
+                error_text = "无法读取响应内容"
+                
+            return {
+                "success": False,
                 "dify_url": DIFY_API_URL,
                 "status_code": response.status_code,
                 "response_headers": dict(response.headers),
-                "response_text": response.text[:500] + "..." if len(response.text) > 500 else response.text,
-                "message": "Dify API连接测试完成"
+                "error_text": error_text[:500],
+                "message": f"Dify API返回错误状态码: {response.status_code}"
             }
-            
-            result["response_json"] = response_json
-            return result
-            
-    except httpx.ReadError as e:
-        logger.error(f"测试时读取响应失败: {str(e)}")
+        
+    except requests.exceptions.Timeout as e:
+        logger.error(f"测试时请求超时: {str(e)}")
         return {
             "success": False,
-            "error": f"读取响应失败: {str(e)}",
+            "error": f"请求超时: {str(e)}",
             "dify_url": DIFY_API_URL,
-            "message": "响应读取中断，但服务器可能已处理请求"
+            "message": "请求超时"
         }
-    except httpx.ConnectError as e:
+    except requests.exceptions.ConnectionError as e:
         logger.error(f"连接Dify API失败: {str(e)}")
         return {
             "success": False,
@@ -486,7 +612,7 @@ async def detect_label(
         
         # 调用Dify Workflow API
         logger.info("准备调用Dify Workflow API...")
-        dify_result = await call_dify_workflow(
+        dify_result = call_dify_workflow(
             image_file_path=file_path,
             food_type=Foodtype,
             package_food_type=PackageFoodType,

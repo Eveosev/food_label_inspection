@@ -28,6 +28,7 @@ import {
 import UploadArea from '../components/UploadArea'
 import DetectionForm from '../components/DetectionForm'
 import DetectionResults from '../components/DetectionResults'
+import MarkdownDetectionResults from '../components/MarkdownDetectionResults'
 import { detectWithDify } from '../services/api'
 
 const { Sider, Content } = Layout
@@ -39,6 +40,7 @@ const HomePage = () => {
   const [isDetecting, setIsDetecting] = useState(false)
   const [detectionProgress, setDetectionProgress] = useState(0)
   const [detectionResults, setDetectionResults] = useState(null)
+  const [resultType, setResultType] = useState(null) // 'legacy' 或 'markdown'
 
   const handleFileUpload = (info) => {
     const { fileList } = info
@@ -107,6 +109,19 @@ const HomePage = () => {
         setIsDetecting(false)
         setDetectionProgress(0)
         
+        // 检测结果类型
+        if (results?.dify_result) {
+          // 新的流式响应格式
+          setResultType('markdown')
+          console.log('使用Markdown结果组件，数据:', results)
+        } else if (results?.基本信息) {
+          // 旧的结构化格式
+          setResultType('legacy')
+        } else {
+          // 默认使用markdown格式
+          setResultType('markdown')
+        }
+        
         // 检查是否是ReadError恢复的结果
         if (results?.dify_result?.read_error_occurred) {
           message.warning('检测已完成，但由于网络问题未获取完整结果。请查看下方显示的基本信息。')
@@ -142,6 +157,7 @@ const HomePage = () => {
   const handleReset = () => {
     setUploadedFiles([])
     setDetectionResults(null)
+    setResultType(null)
     form.resetFields()
   }
 
@@ -289,10 +305,17 @@ const HomePage = () => {
         ) : (
           /* 检测结果 */
           <div id="results">
-            <DetectionResults 
-              results={detectionResults}
-              onReset={handleReset}
-            />
+            {resultType === 'legacy' ? (
+              <DetectionResults 
+                results={detectionResults}
+                onReset={handleReset}
+              />
+            ) : (
+              <MarkdownDetectionResults 
+                results={detectionResults}
+                onReset={handleReset}
+              />
+            )}
           </div>
         )}
       </Content>
