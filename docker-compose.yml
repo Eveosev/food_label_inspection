@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  # 后端服务
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    container_name: food-safety-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./results:/app/results
+    environment:
+      - PYTHONPATH=/app
+      - MONGODB_HOST=114.215.204.62
+      - MONGODB_PORT=27017
+      - MONGODB_USERNAME=jfj
+      - MONGODB_PASSWORD=123abc
+      - MONGODB_DATABASE=food_safety
+    networks:
+      - food-safety-network
+    restart: unless-stopped
+
+  # 前端服务
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    container_name: food-safety-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - food-safety-network
+    restart: unless-stopped
+
+  # Redis缓存服务 (可选)
+  redis:
+    image: redis:7-alpine
+    container_name: food-safety-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - food-safety-network
+    restart: unless-stopped
+
+networks:
+  food-safety-network:
+    driver: bridge
+
+volumes:
+  redis_data:

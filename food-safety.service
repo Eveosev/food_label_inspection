@@ -1,0 +1,15 @@
+[Unit]
+Description=Food Safety Label Detection System
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/food-safety
+ExecStart=/opt/food-safety/deploy-prod.sh
+ExecStop=/usr/local/bin/docker-compose -f /opt/food-safety/docker-compose.prod.yml down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

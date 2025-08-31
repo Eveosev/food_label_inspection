@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  # 后端服务
+  backend:
+    image: food-safety-backend:latest
+    container_name: food-safety-backend-prod
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./results:/app/results
+      - ./logs:/app/logs
+    environment:
+      - PYTHONPATH=/app
+      - MONGODB_HOST=114.215.204.62
+      - MONGODB_PORT=27017
+      - MONGODB_USERNAME=jfj
+      - MONGODB_PASSWORD=123abc
+      - MONGODB_DATABASE=food_safety
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+    networks:
+      - food-safety-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 前端服务
+  frontend:
+    image: food-safety-frontend:latest
+    container_name: food-safety-frontend-prod
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - food-safety-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis缓存服务
+  redis:
+    image: redis:7-alpine
+    container_name: food-safety-redis-prod
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - food-safety-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  food-safety-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local
