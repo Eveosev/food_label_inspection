@@ -1,5 +1,5 @@
 import React from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu, Breadcrumb, Avatar, Dropdown, Badge } from 'antd'
 import { 
   HomeOutlined, 
@@ -17,6 +17,13 @@ import HelpPage from './pages/HelpPage'
 const { Header, Sider, Content } = Layout
 
 function App() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  
+  // 处理菜单点击
+  const handleMenuClick = ({ key }) => {
+    navigate(key)
+  }
   const menuItems = [
     {
       key: '/',
@@ -98,13 +105,14 @@ function App() {
         
         <Menu
           mode="inline"
-          defaultSelectedKeys={['/']}
+          selectedKeys={[location.pathname]}
           style={{ 
             background: 'transparent',
             border: 'none'
           }}
           theme="dark"
           items={menuItems}
+          onClick={handleMenuClick}
         />
       </Sider>
 
