@@ -7,11 +7,78 @@ import uuid
 import asyncio
 import logging
 import requests
+import re
 from datetime import datetime
 
 # 配置日志
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
+
+def separate_json_and_markdown(text_content):
+    """分离JSON和Markdown内容"""
+    logger.info("开始分离JSON和Markdown内容")
+    
+    if not text_content or not isinstance(text_content, str):
+        logger.warning("输入内容为空或不是字符串")
+        return {
+            "json_data": None,
+            "markdown_content": text_content or ""
+        }
+    
+    try:
+        # 方法1: 查找「不规范内容总结报告」的位置
+        report_index = text_content.find('不规范内容总结报告')
+        if report_index != -1:
+            logger.info(f"找到「不规范内容总结报告」位置: {report_index}")
+            
+            # 分离JSON和Markdown
+            json_part = text_content[:report_index].strip()
+            markdown_part = text_content[report_index:].strip()
+            
+            # 尝试解析JSON部分
+            try:
+                json_data = json.loads(json_part)
+                logger.info("成功解析JSON部分")
+                return {
+                    "json_data": json_data,
+                    "markdown_content": markdown_part
+                }
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON解析失败: {e}")
+        
+        # 方法2: 使用正则表达式提取最大的JSON对象
+        logger.info("尝试使用正则表达式提取JSON")
+        json_match = re.search(r'\{.*\}', text_content, re.DOTALL)
+        if json_match:
+            json_candidate = json_match.group(0)
+            try:
+                json_data = json.loads(json_candidate)
+                logger.info("成功通过正则表达式解析JSON")
+                
+                # 提取Markdown部分（JSON之后的内容）
+                markdown_start = json_match.end()
+                markdown_content = text_content[markdown_start:].strip()
+                
+                return {
+                    "json_data": json_data,
+                    "markdown_content": markdown_content
+                }
+            except json.JSONDecodeError as e:
+                logger.warning(f"正则表达式提取的JSON解析失败: {e}")
+        
+        # 方法3: 如果都失败，返回原始内容作为Markdown
+        logger.warning("无法分离JSON和Markdown，返回原始内容")
+        return {
+            "json_data": None,
+            "markdown_content": text_content
+        }
+        
+    except Exception as e:
+        logger.error(f"分离JSON和Markdown时发生错误: {e}")
+        return {
+            "json_data": None,
+            "markdown_content": text_content
+        }
 
 # Dify API配置
 DIFY_API_URL = "http://114.215.204.62/v1/workflows/run"
@@ -178,6 +245,23 @@ def parse_streaming_response(response):
                         if final_outputs:
                             workflow_data["outputs"].update(final_outputs)
                             logger.info(f"最终输出: {json.dumps(final_outputs, ensure_ascii=False)}")
+                            
+                            # 处理text字段，分离JSON和Markdown
+                            if "text" in final_outputs:
+                                text_content = final_outputs["text"]
+                                logger.info("开始处理text字段，分离JSON和Markdown")
+                                
+                                separated_data = separate_json_and_markdown(text_content)
+                                
+                                # 更新outputs，添加分离后的数据
+                                workflow_data["outputs"]["json_data"] = separated_data["json_data"]
+                                workflow_data["outputs"]["markdown_content"] = separated_data["markdown_content"]
+                                
+                                logger.info("JSON和Markdown分离完成")
+                                if separated_data["json_data"]:
+                                    logger.info(f"JSON数据包含字段: {list(separated_data['json_data'].keys())}")
+                                if separated_data["markdown_content"]:
+                                    logger.info(f"Markdown内容长度: {len(separated_data['markdown_content'])}")
                             
                         # 最终统计
                         final_tokens = data.get("total_tokens")
