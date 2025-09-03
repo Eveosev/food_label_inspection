@@ -267,20 +267,22 @@ const { Title, Text } = Typography
     
     return (
       <div>
-        {/* 1. 不规范内容统计 */}
+        {/* 1. 不规范内容总结报告 - Markdown格式 - 提到最前面展示 */}
+        <div style={{ marginBottom: '24px' }}>
+          <Title level={4} style={{ color: '#cf1322', marginBottom: '16px' }}>
+            不规范内容总结报告
+          </Title>
+          {renderNonCompliantReport(originalContent)}
+        </div>
+        
+        <Divider />
+        
+        {/* 2. 不规范内容统计 */}
         <div style={{ marginBottom: '24px' }}>
           <Title level={4} style={{ color: '#cf1322', marginBottom: '16px' }}>
             不规范内容统计
           </Title>
           {renderJsonSection(data, '不规范内容统计')}
-        </div>
-        
-        {/* 2. 不规范内容汇总 */}
-        <div style={{ marginBottom: '24px' }}>
-          <Title level={4} style={{ color: '#cf1322', marginBottom: '16px' }}>
-            不规范内容汇总
-          </Title>
-          {renderJsonSection(data, '不规范内容汇总')}
         </div>
         
         {/* 3. 基本信息 */}
@@ -321,15 +323,6 @@ const { Title, Text } = Typography
             详细检测结果
           </Title>
           {renderJsonSection(data, '详细检测结果')}
-        </div>
-        
-        {/* 8. 不规范内容总结报告 - Markdown格式 */}
-        <Divider />
-        <div style={{ marginBottom: '24px' }}>
-          <Title level={4} style={{ color: '#cf1322', marginBottom: '16px' }}>
-            不规范内容总结报告
-          </Title>
-          {renderNonCompliantReport(originalContent)}
         </div>
       </div>
     )
