@@ -101,6 +101,47 @@ const MarkdownDetectionResults = ({ results, onReset }) => {
         console.log('Using rawData as JSON:', rawData)
         jsonData = rawData
       }
+      
+      // 如果还是没有JSON数据，尝试直接解析content是否为JSON
+      if (!jsonData && typeof content === 'string') {
+        try {
+          // 尝试直接解析content是否为JSON
+          const trimmedContent = content.trim()
+          if (trimmedContent.startsWith('{') && trimmedContent.endsWith('}')) {
+            console.log('Attempting to parse content as JSON directly')
+            jsonData = JSON.parse(trimmedContent)
+            console.log('Successfully parsed content as JSON:', jsonData)
+          }
+        } catch (e) {
+          console.log('Content is not valid JSON, using as markdown')
+        }
+      }
+      
+      // 如果还是没有JSON数据，尝试从rawData中提取text字段
+      if (!jsonData && rawData && rawData.text && typeof rawData.text === 'string') {
+        try {
+          console.log('Attempting to parse rawData.text as JSON:', rawData.text)
+          
+          // 使用正则表达式提取JSON部分（从开头到第一个完整的JSON对象结束）
+          // 匹配从 { 开始到对应的 } 结束的完整JSON
+          const jsonMatch = rawData.text.match(/^(\{[\s\S]*?\})\s*\n/)
+          if (jsonMatch) {
+            const jsonString = jsonMatch[1]
+            console.log('Extracted JSON string:', jsonString)
+            jsonData = JSON.parse(jsonString)
+            console.log('Successfully parsed extracted JSON:', jsonData)
+          } else {
+            // 如果没有匹配到，尝试直接解析整个text
+            const trimmedText = rawData.text.trim()
+            if (trimmedText.startsWith('{') && trimmedText.endsWith('}')) {
+              jsonData = JSON.parse(trimmedText)
+              console.log('Successfully parsed rawData.text as JSON:', jsonData)
+            }
+          }
+        } catch (e) {
+          console.log('rawData.text is not valid JSON:', e)
+        }
+      }
     } catch (e) {
       console.error('JSON解析失败:', e)
       console.log('使用原始内容')
@@ -124,7 +165,7 @@ const MarkdownDetectionResults = ({ results, onReset }) => {
         {/* 1. 不规范内容统计 */}
         <div style={{ marginBottom: '24px' }}>
           <Title level={4} style={{ color: '#cf1322', marginBottom: '16px' }}>
-            📊 不规范内容统计
+            不规范内容统计
           </Title>
           {renderJsonSection(data, '不规范内容统计')}
         </div>
@@ -132,7 +173,7 @@ const MarkdownDetectionResults = ({ results, onReset }) => {
         {/* 2. 不规范内容汇总 */}
         <div style={{ marginBottom: '24px' }}>
           <Title level={4} style={{ color: '#cf1322', marginBottom: '16px' }}>
-            ⚠️ 不规范内容汇总
+            不规范内容汇总
           </Title>
           {renderJsonSection(data, '不规范内容汇总')}
         </div>
@@ -140,7 +181,7 @@ const MarkdownDetectionResults = ({ results, onReset }) => {
         {/* 3. 基本信息 */}
         <div style={{ marginBottom: '24px' }}>
           <Title level={4} style={{ color: '#1890ff', marginBottom: '16px' }}>
-            ℹ️ 基本信息
+            基本信息
           </Title>
           {renderJsonSection(data, '基本信息')}
         </div>
@@ -148,7 +189,7 @@ const MarkdownDetectionResults = ({ results, onReset }) => {
         {/* 4. 合规性评估 */}
         <div style={{ marginBottom: '24px' }}>
           <Title level={4} style={{ color: '#52c41a', marginBottom: '16px' }}>
-            ✅ 合规性评估
+            合规性评估
           </Title>
           {renderJsonSection(data, '合规性评估')}
         </div>
@@ -156,7 +197,7 @@ const MarkdownDetectionResults = ({ results, onReset }) => {
         {/* 5. 整改优先级排序 */}
         <div style={{ marginBottom: '24px' }}>
           <Title level={4} style={{ color: '#fa8c16', marginBottom: '16px' }}>
-            🔄 整改优先级排序
+            整改优先级排序
           </Title>
           {renderJsonSection(data, '整改优先级排序')}
         </div>
@@ -164,7 +205,7 @@ const MarkdownDetectionResults = ({ results, onReset }) => {
         {/* 6. 豁免情况 */}
         <div style={{ marginBottom: '24px' }}>
           <Title level={4} style={{ color: '#722ed1', marginBottom: '16px' }}>
-            🛡️ 豁免情况
+            豁免情况
           </Title>
           {renderJsonSection(data, '豁免情况')}
         </div>
@@ -172,7 +213,7 @@ const MarkdownDetectionResults = ({ results, onReset }) => {
         {/* 7. 详细检测结果 */}
         <div style={{ marginBottom: '24px' }}>
           <Title level={4} style={{ color: '#13c2c2', marginBottom: '16px' }}>
-            🔍 详细检测结果
+            详细检测结果
           </Title>
           {renderJsonSection(data, '详细检测结果')}
         </div>
@@ -181,7 +222,7 @@ const MarkdownDetectionResults = ({ results, onReset }) => {
         <Divider />
         <div style={{ marginBottom: '24px' }}>
           <Title level={4} style={{ color: '#cf1322', marginBottom: '16px' }}>
-            📝 不规范内容总结报告
+            不规范内容总结报告
           </Title>
           {renderNonCompliantReport(originalContent)}
         </div>
