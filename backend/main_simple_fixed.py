@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Dify API配置
 DIFY_API_URL = "http://114.215.204.62/v1/workflows/run"
+DIFY_FILE_URL = "http://114.215.204.62/v1/files/upload"
 DIFY_API_TOKEN = "app-xBO6kaetqL7HF0avy1cSZMTR"
 
 app = FastAPI(
@@ -32,6 +33,192 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+async def upload_image_to_dify(file_path: str, user_id: str):
+    """上传文件到Dify服务器"""
+    try:
+        logger.info(f"开始上传文件到Dify: {file_path}")
+        
+        # 根据文件扩展名确定MIME类型
+        file_ext = os.path.splitext(file_path)[1].lower()
+        mime_type_map = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.pdf': 'application/pdf'
+        }
+        mime_type = mime_type_map.get(file_ext, 'image/jpeg')
+        
+        # 准备文件上传
+        with open(file_path, 'rb') as f:
+            files = {
+                "file": (os.path.basename(file_path), f, mime_type)
+            }
+            data = {"user": user_id}
+            
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    DIFY_FILE_URL,
+                    headers={"Authorization": f"Bearer {DIFY_API_TOKEN}"},
+                    files=files,
+                    data=data
+                )
+        
+        logger.info(f"Dify文件上传响应状态码: {response.status_code}")
+        logger.info(f"Dify文件上传响应内容: {response.text}")
+        
+        if response.status_code == 201:  # 201 表示创建成功
+            file_info = response.json()
+            logger.info(f"文件上传成功，文件ID: {file_info.get('id')}")
+            return file_info
+        else:
+            logger.error(f"文件上传失败，状态码: {response.status_code}")
+            logger.error(f"错误内容: {response.text}")
+            return None
+    except Exception as e:
+        logger.error(f"上传文件时发生错误: {str(e)}")
+        import traceback
+        logger.error(f"堆栈跟踪: {traceback.format_exc()}")
+        return None
+
+def separate_json_and_markdown(text_content):
+    """分离JSON和Markdown内容"""
+    logger.info("开始分离JSON和Markdown内容")
+    
+    if not text_content or not isinstance(text_content, str):
+        logger.warning("输入内容为空或不是字符串")
+        return {
+            "json_data": None,
+            "markdown_content": text_content or ""
+        }
+    
+    try:
+        # 方法1: 查找「不规范内容总结报告」的位置
+        report_index = text_content.find('不规范内容总结报告')
+        if report_index != -1:
+            logger.info(f"找到「不规范内容总结报告」位置: {report_index}")
+            
+            # 分离JSON和Markdown
+            json_part = text_content[:report_index].strip()
+            markdown_part = text_content[report_index:].strip()
+            
+            # 尝试解析JSON部分
+            try:
+                json_data = json.loads(json_part)
+                logger.info("成功解析JSON部分")
+                return {
+                    "json_data": json_data,
+                    "markdown_content": markdown_part
+                }
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON解析失败: {e}")
+        
+        # 方法2: 使用正则表达式提取最大的JSON对象
+        logger.info("尝试使用正则表达式提取JSON")
+        import re
+        json_match = re.search(r'\{.*\}', text_content, re.DOTALL)
+        if json_match:
+            json_candidate = json_match.group(0)
+            try:
+                json_data = json.loads(json_candidate)
+                logger.info("成功通过正则表达式解析JSON")
+                
+                # 提取Markdown部分（JSON之后的内容）
+                markdown_start = json_match.end()
+                markdown_content = text_content[markdown_start:].strip()
+                
+                return {
+                    "json_data": json_data,
+                    "markdown_content": markdown_content
+                }
+            except json.JSONDecodeError as e:
+                logger.warning(f"正则表达式提取的JSON解析失败: {e}")
+        
+        # 方法3: 如果都失败，返回原始内容作为Markdown
+        logger.warning("无法分离JSON和Markdown，返回原始内容")
+        return {
+            "json_data": None,
+            "markdown_content": text_content
+        }
+        
+    except Exception as e:
+        logger.error(f"分离JSON和Markdown时发生错误: {e}")
+        return {
+            "json_data": None,
+            "markdown_content": text_content
+        }
+
+def process_dify_response(dify_data):
+    """处理Dify响应数据，确保格式符合前端期望"""
+    logger.info("开始处理Dify响应数据")
+    
+    try:
+        # 提取outputs数据
+        outputs = {}
+        metadata = {}
+        
+        # 从不同可能的字段中提取数据
+        if isinstance(dify_data, dict):
+            # 提取输出数据
+            if 'data' in dify_data and 'outputs' in dify_data['data']:
+                outputs = dify_data['data']['outputs']
+            elif 'outputs' in dify_data:
+                outputs = dify_data['outputs']
+            elif 'data' in dify_data:
+                outputs = dify_data['data']
+            else:
+                outputs = dify_data
+            
+            # 提取元数据
+            if 'data' in dify_data and 'metadata' in dify_data['data']:
+                metadata = dify_data['data']['metadata']
+            elif 'metadata' in dify_data:
+                metadata = dify_data['metadata']
+        
+        logger.info(f"提取的outputs: {outputs}")
+        logger.info(f"提取的metadata: {metadata}")
+        
+        # 查找文本内容
+        text_content = None
+        possible_text_fields = ['text', 'result', 'output', 'content', 'answer', 'response']
+        
+        for field in possible_text_fields:
+            if field in outputs and isinstance(outputs[field], str):
+                text_content = outputs[field]
+                logger.info(f"找到文本内容在字段: {field}")
+                break
+        
+        if text_content:
+            # 分离JSON和Markdown内容
+            separated_data = separate_json_and_markdown(text_content)
+            
+            # 更新outputs，添加分离后的数据
+            outputs['json_data'] = separated_data['json_data']
+            outputs['markdown_content'] = separated_data['markdown_content']
+            
+            # 保留原始文本
+            if 'text' not in outputs:
+                outputs['text'] = text_content
+        
+        # 构建符合前端期望的结构
+        processed_result = {
+            "outputs": outputs,
+            "metadata": metadata
+        }
+        
+        logger.info("Dify响应数据处理完成")
+        return processed_result
+        
+    except Exception as e:
+        logger.error(f"处理Dify响应数据时发生错误: {e}")
+        import traceback
+        logger.error(f"堆栈跟踪: {traceback.format_exc()}")
+        
+        # 返回原始数据作为fallback
+        return {
+            "outputs": dify_data if isinstance(dify_data, dict) else {"raw_data": dify_data},
+            "metadata": {}
+        }
 
 async def call_dify_workflow(image_file_path: str, food_type: str, package_food_type: str, single_or_multi: str, package_size: str, max_retries: int = 2):
     """调用Dify Workflow API进行食品标签检测，带重试机制"""
@@ -52,7 +239,7 @@ async def call_dify_workflow(image_file_path: str, food_type: str, package_food_
             logger.info(f"Dify API URL: {DIFY_API_URL}")
             logger.info(f"Dify API Token: {DIFY_API_TOKEN[:20]}...")
             
-            # 检查文件路径类型，决定使用本地文件还是base64编码
+            # 检查文件路径类型，决定使用本地文件还是远程URL
             if image_file_path.startswith("http"):
                 # 远程URL方式
                 logger.info("使用远程URL方式上传图片")
@@ -62,30 +249,21 @@ async def call_dify_workflow(image_file_path: str, food_type: str, package_food_
                     "url": image_file_path
                 }
             else:
-                # 本地文件，使用base64编码
-                logger.info("使用base64编码方式上传图片")
-                try:
-                    with open(image_file_path, "rb") as f:
-                        image_data = f.read()
-                        image_base64 = base64.b64encode(image_data).decode('utf-8')
-                        
-                    # 获取文件扩展名来确定MIME类型
-                    file_ext = os.path.splitext(image_file_path)[1].lower()
-                    mime_type = {
-                        '.jpg': 'image/jpeg',
-                        '.jpeg': 'image/jpeg', 
-                        '.png': 'image/png',
-                        '.pdf': 'application/pdf'
-                    }.get(file_ext, 'image/jpeg')
-                    
+                # 本地文件，先上传到Dify服务器，然后使用文件ID
+                logger.info("使用Dify文件上传方式处理图片")
+                user_id = f"user-{uuid.uuid4().hex[:8]}"
+                file_info = await upload_image_to_dify(image_file_path, user_id)
+                
+                if file_info and file_info.get('id'):
+                    # 使用上传后的文件ID
                     tag_image = {
-                        "type": "image", 
-                        "transfer_method": "local_file",
-                        "upload_file_id": f"data:{mime_type};base64,{image_base64}"
+                        "type": "image",
+                        "transfer_method": "local_file", 
+                        "upload_file_id": file_info['id']
                     }
-                except Exception as e:
-                    logger.error(f"读取图片文件失败: {str(e)}")
-                    raise Exception(f"读取图片文件失败: {str(e)}")
+                    logger.info(f"使用Dify文件ID: {file_info['id']}")
+                else:
+                    raise Exception(f"图片上传Dify服务器失败，请检查")
             
             # 构建请求数据
             payload = {
@@ -446,7 +624,10 @@ async def detect_label(
         logger.info(f"Dify返回数据类型: {type(dify_data)}")
         logger.info(f"Dify返回数据内容: {json.dumps(dify_data, indent=2, ensure_ascii=False) if isinstance(dify_data, dict) else str(dify_data)}")
         
-        # 简单处理检测结果，直接返回Dify的原始数据
+        # 处理Dify返回的数据，确保格式符合前端期望
+        processed_dify_result = process_dify_response(dify_data)
+        
+        # 构建符合前端期望的响应结构
         result = {
             "success": True,
             "detection_time": DetectionTime,
@@ -462,7 +643,7 @@ async def detect_label(
                 "PackageSize": PackageSize,
                 "SpecialRequirement": SpecialRequirement
             },
-            "dify_result": dify_data,
+            "dify_result": processed_dify_result,
             "message": "检测完成"
         }
         

@@ -1,0 +1,37 @@
+services:
+  food-label-app:
+    image: food-label-inspection:latest
+    container_name: food-label-inspection
+    ports:
+      - "8011:8011"  # 前端端口
+      - "8000:8000"  # 后端API端口 (可选，用于直接访问API)
+    volumes:
+      - ./uploads:/app/uploads
+      - ./results:/app/results
+      - app-logs:/var/log
+    environment:
+      - NODE_ENV=production
+      - PYTHONPATH=/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+
+volumes:
+  app-logs:
+    driver: local
+
+networks:
+  default:
+    name: food-label-network

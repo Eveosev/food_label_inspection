@@ -186,8 +186,8 @@ const { Panel } = Collapse
   }
 
   // 智能内容解析和优化显示
-  const renderOptimizedContent = (content, rawData) => {
-    console.log('renderOptimizedContent called with:', { content, rawData })
+  const renderOptimizedContent = (parsedContent, rawData) => {
+    console.log('renderOptimizedContent called with:', { parsedContent, rawData })
     
     // 尝试解析JSON内容
     let jsonData = null
@@ -203,24 +203,31 @@ const { Panel } = Collapse
         console.log('Markdown content from backend:', markdownContent)
       }
       
-      // 方法2: 尝试从content中提取JSON（使用正则表达式）
-      if (!jsonData && typeof content === 'string') {
-        console.log('Attempting to extract JSON from content using regex')
-        const contentJsonMatch = content.match(/\{.*([\s\S]*?).*\}/)
+      // 方法2: 如果parsedContent已经是JSON类型，直接使用
+      if (!jsonData && parsedContent && parsedContent.type === 'json') {
+        console.log('Using parsed JSON content')
+        jsonData = parsedContent.content
+        console.log('JSON data from parsed content:', jsonData)
+      }
+      
+      // 方法3: 尝试从parsedContent中提取JSON（如果是字符串）
+      if (!jsonData && parsedContent && parsedContent.type === 'markdown' && typeof parsedContent.content === 'string') {
+        console.log('Attempting to extract JSON from parsed content using regex')
+        const contentJsonMatch = parsedContent.content.match(/\{.*([\s\S]*?).*\}/)
         if (contentJsonMatch) {
-          console.log('Found JSON in content:', contentJsonMatch[0])
+          console.log('Found JSON in parsed content:', contentJsonMatch[0])
           try {
             jsonData = JSON.parse(contentJsonMatch[0])
-            console.log('Successfully parsed JSON from content:', jsonData)
+            console.log('Successfully parsed JSON from parsed content:', jsonData)
           } catch (e) {
-            console.log('Failed to parse JSON from content:', e.message)
+            console.log('Failed to parse JSON from parsed content:', e.message)
           }
         }
       }
       
-      // 方法3: 尝试从markdown代码块中提取JSON
-      if (!jsonData && typeof content === 'string' && content.includes('```json')) {
-        const jsonMatch = content.match(/```json\n([\s\S]*?)\n```/)
+      // 方法4: 尝试从markdown代码块中提取JSON
+      if (!jsonData && parsedContent && parsedContent.type === 'markdown' && typeof parsedContent.content === 'string' && parsedContent.content.includes('```json')) {
+        const jsonMatch = parsedContent.content.match(/```json\n([\s\S]*?)\n```/)
         if (jsonMatch) {
           console.log('Found JSON in markdown:', jsonMatch[1])
           jsonData = JSON.parse(jsonMatch[1])
@@ -228,24 +235,10 @@ const { Panel } = Collapse
         }
       }
       
-      // 方法4: 使用rawData作为JSON
+      // 方法5: 使用rawData作为JSON
       if (!jsonData && rawData && typeof rawData === 'object') {
         console.log('Using rawData as JSON:', rawData)
         jsonData = rawData
-      }
-      
-      // 方法5: 尝试直接解析content是否为JSON
-      if (!jsonData && typeof content === 'string') {
-        try {
-          const trimmedContent = content.trim()
-          if (trimmedContent.startsWith('{') && trimmedContent.endsWith('}')) {
-            console.log('Attempting to parse content as JSON directly')
-            jsonData = JSON.parse(trimmedContent)
-            console.log('Successfully parsed content as JSON:', jsonData)
-          }
-        } catch (e) {
-          console.log('Content is not valid JSON, using as markdown')
-        }
       }
       
       // 如果还是没有JSON数据，尝试从rawData中提取text字段
@@ -566,7 +559,19 @@ const { Panel } = Collapse
 
   // 渲染不规范内容总结报告 - Markdown格式
   const renderNonCompliantReport = (content) => {
-    if (!content || typeof content !== 'string') {
+    // 提取字符串内容
+    let textContent = ''
+    if (typeof content === 'string') {
+      textContent = content
+    } else if (content && content.content && typeof content.content === 'string') {
+      textContent = content.content
+    } else if (rawOutputs && rawOutputs.markdown_content && typeof rawOutputs.markdown_content === 'string') {
+      textContent = rawOutputs.markdown_content
+    } else if (rawOutputs && rawOutputs.text && typeof rawOutputs.text === 'string') {
+      textContent = rawOutputs.text
+    }
+    
+    if (!textContent) {
       return (
         <div style={{ 
           padding: '16px', 
@@ -581,7 +586,7 @@ const { Panel } = Collapse
     }
     
     // 查找「不规范内容总结报告」的位置
-    const reportIndex = content.indexOf('不规范内容总结报告')
+    const reportIndex = textContent.indexOf('不规范内容总结报告')
     if (reportIndex === -1) {
       return (
         <div style={{ 
@@ -597,7 +602,7 @@ const { Panel } = Collapse
     }
     
     // 提取从「不规范内容总结报告」开始的内容
-    const reportContent = content.substring(reportIndex)
+    const reportContent = textContent.substring(reportIndex)
     
     return (
       <div style={{ 
@@ -651,7 +656,23 @@ const { Panel } = Collapse
   }
 
   // 渲染Markdown内容
-  const renderMarkdownContent = (content) => {
+  const renderMarkdownContent = (parsedContent) => {
+    // 提取实际的文本内容
+    let textContent = ''
+    if (typeof parsedContent === 'string') {
+      textContent = parsedContent
+    } else if (parsedContent && parsedContent.content) {
+      if (typeof parsedContent.content === 'string') {
+        textContent = parsedContent.content
+      } else {
+        textContent = JSON.stringify(parsedContent.content, null, 2)
+      }
+    } else if (rawOutputs && rawOutputs.text) {
+      textContent = rawOutputs.text
+    } else {
+      textContent = '暂无内容'
+    }
+    
     return (
       <div style={{ 
         padding: '20px', 
@@ -689,7 +710,7 @@ const { Panel } = Collapse
             }
           }}
         >
-          {content}
+          {textContent}
         </ReactMarkdown>
       </div>
     )
@@ -1031,7 +1052,7 @@ const { Panel } = Collapse
         
         {hasContent ? (
           <div>
-            {renderOptimizedContent(markdownContent, rawOutputs)}
+            {renderOptimizedContent(content, rawOutputs)}
           </div>
         ) : (
           <Alert

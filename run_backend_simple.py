@@ -28,8 +28,8 @@ if __name__ == "__main__":
     # 测试简化版导入
     try:
         print("🔍 测试简化版模块导入...")
-        from backend.main_simple import app
-        print("✅ 成功导入简化版 backend.main_simple")
+        from backend.main_simple_fixed import app
+        print("✅ 成功导入简化版 backend.main_simple_fixed")
         
     except ImportError as e:
         print(f"❌ 导入错误: {e}")
@@ -41,7 +41,7 @@ if __name__ == "__main__":
     
     # 启动uvicorn服务器
     uvicorn.run(
-        "backend.main_simple:app",
+        "backend.main_simple_fixed:app",
         host="0.0.0.0",
         port=8000,
         reload=True,

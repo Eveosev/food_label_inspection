@@ -224,7 +224,14 @@ def parse_streaming_response(response):
                         metadata = data.get("execution_metadata", {})
                         if metadata:
                             workflow_data["total_tokens"] += metadata.get("total_tokens", 0)
-                            workflow_data["total_price"] += metadata.get("total_price", 0.0)
+                            # 确保total_price是数字类型
+                            price = metadata.get("total_price", 0.0)
+                            if isinstance(price, str):
+                                try:
+                                    price = float(price)
+                                except (ValueError, TypeError):
+                                    price = 0.0
+                            workflow_data["total_price"] += price
                             workflow_data["currency"] = metadata.get("currency", "USD")
                         
                         # 提取输出数据
