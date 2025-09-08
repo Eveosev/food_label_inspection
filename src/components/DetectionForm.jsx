@@ -7,7 +7,9 @@ const { TextArea } = Input
 
 const DetectionForm = ({ form, onFinish, isDetecting }) => {
   const foodTypeOptions = [
+    { label: '面包', value: '面包' },
     { label: '糕点', value: '糕点' },
+    { label: '调味料', value: '调味料' },
     { label: '饮料', value: '饮料' },
     { label: '零食', value: '零食' },
     { label: '乳制品', value: '乳制品' },
@@ -17,8 +19,7 @@ const DetectionForm = ({ form, onFinish, isDetecting }) => {
 
   const packageFoodTypeOptions = [
     { label: '直接提供给消费者的预包装食品', value: '直接提供给消费者的预包装食品' },
-    { label: '餐饮服务', value: '餐饮服务' },
-    { label: '其他', value: '其他' }
+    { label: '非直接提供给消费者的预包装食品', value: '非直接提供给消费者的预包装食品' }
   ]
 
   const singleOrMultiOptions = [
@@ -27,7 +28,10 @@ const DetectionForm = ({ form, onFinish, isDetecting }) => {
   ]
 
   const packageSizeOptions = [
+    { label: '包装总表面积≤100cm2或最大表面面积≤20cm2的食品', value: '包装总表面积≤100cm2或最大表面面积≤20cm2的食品' },
+    { label: '包装的总面积小于100cm2的食品', value: '包装的总面积小于100cm2的食品' },
     { label: '最大表面面积大于35cm2', value: '最大表面面积大于35cm2' },
+    { label: '最大表面面积小于10cm2', value: '最大表面面积小于10cm2' },
     { label: '最大表面面积小于等于35cm2', value: '最大表面面积小于等于35cm2' }
   ]
 
