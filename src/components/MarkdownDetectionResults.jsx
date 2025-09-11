@@ -418,7 +418,7 @@ const { Panel } = Collapse
               border: '1px solid #e9ecef'
             }}>
               <Title level={5} style={{ color: '#1890ff', marginBottom: '12px' }}>
-                检测项目 {index + 1}
+                {item.检测项目}
               </Title>
               {Object.entries(item).map(([key, value]) => (
                 <div key={key} style={{ 
