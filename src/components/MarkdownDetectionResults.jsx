@@ -409,7 +409,9 @@ const { Panel } = Collapse
           border: '1px solid #f0f0f0',
           boxShadow: '0 2px 8px rgba(0,0,0,0.06)'
         }}>
-          {sectionData.map((item, index) => (
+          {sectionData
+            .filter(item => !(item["检测结果"] === "合格"))
+            .map((item, index) => (
             <div key={index} style={{ 
               marginBottom: index < sectionData.length - 1 ? '20px' : '0',
               padding: '16px',
